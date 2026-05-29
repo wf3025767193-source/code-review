@@ -92,5 +92,114 @@ export async function analyzePullRequest(
     throw new Error(message);
   }
 
-  return (await response.json()) as ReviewAnalyzeResponse;
+  return parseReviewAnalyzeResponse(await response.json());
+}
+
+function parseReviewAnalyzeResponse(data: unknown): ReviewAnalyzeResponse {
+  if (!isRecord(data)) {
+    throw new Error("后端响应格式不正确");
+  }
+
+  const pr = data.pr;
+  const analysis = data.analysis;
+  if (!isRecord(pr) || !isRecord(analysis)) {
+    throw new Error("后端响应缺少 PR 或分析结果");
+  }
+
+  assertString(pr.title, "pr.title");
+  assertString(pr.url, "pr.url");
+  assertString(pr.author, "pr.author");
+  assertString(pr.owner, "pr.owner");
+  assertString(pr.repo, "pr.repo");
+  assertNumber(pr.number, "pr.number");
+  assertString(pr.baseBranch, "pr.baseBranch");
+  assertString(pr.headBranch, "pr.headBranch");
+
+  const summary = analysis.summary;
+  const metrics = analysis.metrics;
+  if (!isRecord(summary) || !isRecord(metrics)) {
+    throw new Error("后端响应缺少 summary 或 metrics");
+  }
+
+  assertString(summary.overview, "analysis.summary.overview");
+  assertStringArray(summary.changedModules, "analysis.summary.changedModules");
+  assertStringArray(summary.impact, "analysis.summary.impact");
+  assertRiskArray(analysis.risks);
+  assertSuggestionArray(analysis.suggestions);
+  assertNumber(metrics.highRiskCount, "analysis.metrics.highRiskCount");
+  assertNumber(metrics.mediumRiskCount, "analysis.metrics.mediumRiskCount");
+  assertNumber(metrics.lowRiskCount, "analysis.metrics.lowRiskCount");
+  assertNumber(metrics.analyzedFileCount, "analysis.metrics.analyzedFileCount");
+  assertNumber(data.durationMs, "durationMs");
+
+  return data as unknown as ReviewAnalyzeResponse;
+}
+
+function assertRiskArray(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error("后端响应字段 analysis.risks 格式不正确");
+  }
+
+  for (const risk of value) {
+    if (!isRecord(risk)) {
+      throw new Error("后端响应字段 analysis.risks 格式不正确");
+    }
+    assertString(risk.file, "risk.file");
+    if (risk.line !== null) {
+      assertNumber(risk.line, "risk.line");
+    }
+    assertOneOf(risk.severity, ["high", "medium", "low"], "risk.severity");
+    assertString(risk.category, "risk.category");
+    assertString(risk.issue, "risk.issue");
+    assertString(risk.impact, "risk.impact");
+    assertString(risk.suggestion, "risk.suggestion");
+    assertNumber(risk.confidence, "risk.confidence");
+  }
+}
+
+function assertSuggestionArray(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new Error("后端响应字段 analysis.suggestions 格式不正确");
+  }
+
+  for (const suggestion of value) {
+    if (!isRecord(suggestion)) {
+      throw new Error("后端响应字段 analysis.suggestions 格式不正确");
+    }
+    assertString(suggestion.file, "suggestion.file");
+    assertOneOf(
+      suggestion.type,
+      ["must_fix", "should_fix", "nice_to_have"],
+      "suggestion.type",
+    );
+    assertString(suggestion.comment, "suggestion.comment");
+  }
+}
+
+function assertStringArray(value: unknown, field: string): void {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`后端响应字段 ${field} 格式不正确`);
+  }
+}
+
+function assertString(value: unknown, field: string): void {
+  if (typeof value !== "string") {
+    throw new Error(`后端响应字段 ${field} 格式不正确`);
+  }
+}
+
+function assertNumber(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`后端响应字段 ${field} 格式不正确`);
+  }
+}
+
+function assertOneOf(value: unknown, allowed: string[], field: string): void {
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new Error(`后端响应字段 ${field} 格式不正确`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
