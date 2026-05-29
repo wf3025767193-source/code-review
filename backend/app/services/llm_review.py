@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -9,6 +10,10 @@ from pydantic import ValidationError
 from app.schemas.review import MockReviewRequest, ReviewResult
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+BASE_DELAY_SECONDS = 1.0
+RETRIABLE_ERROR_TYPES = frozenset({"timeout", "rate_limit", "unavailable", "connection"})
 
 LLM_ERROR_MESSAGES = {
     "authentication": "模型服务认证失败，请检查 API Key 配置",
@@ -44,49 +49,76 @@ class LLMReviewService:
 
         prompt = self._build_prompt()
         schema = json.dumps(ReviewResult.model_json_schema(), ensure_ascii=False)
+        max_attempts = 1 + MAX_RETRIES
+        last_error_type = "unknown"
+        last_error_message = ""
 
-        try:
-            llm = self._build_llm()
-            chain = prompt | llm
-            response = await chain.ainvoke(
-                {
-                    "schema": schema,
-                    "pr_payload": json.dumps(payload, ensure_ascii=False),
-                }
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            error_type = self._classify_model_error(exc)
-            logger.warning(
-                "llm_request_failed",
-                exc_info=True,
-                extra={
-                    "props": {
-                        "event": "llm_request_failed",
-                        "model": self.model,
-                        "error_type": error_type,
-                        "exception_type": exc.__class__.__name__,
-                        "error_message": self._sanitize_error_message(str(exc)),
+        for attempt in range(max_attempts):
+            try:
+                llm = self._build_llm()
+                chain = prompt | llm
+                response = await chain.ainvoke(
+                    {
+                        "schema": schema,
+                        "pr_payload": json.dumps(payload, ensure_ascii=False),
                     }
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={
-                    "code": f"llm_{error_type}",
-                    "message": LLM_ERROR_MESSAGES[error_type],
-                },
-            ) from exc
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                last_error_type = self._classify_model_error(exc)
+                last_error_message = self._sanitize_error_message(str(exc))
+                is_last = attempt == max_attempts - 1
 
-        content = getattr(response, "content", response)
-        if not isinstance(content, str):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Model returned an unsupported response format",
-            )
+                if last_error_type in RETRIABLE_ERROR_TYPES and not is_last:
+                    delay = BASE_DELAY_SECONDS * (2**attempt)
+                    logger.warning(
+                        "llm_request_retrying",
+                        extra={
+                            "props": {
+                                "event": "llm_request_retrying",
+                                "model": self.model,
+                                "attempt": attempt + 1,
+                                "next_delay_s": round(delay, 1),
+                                "error_type": last_error_type,
+                                "exception_type": exc.__class__.__name__,
+                                "error_message": last_error_message,
+                            }
+                        },
+                    )
+                    await asyncio.sleep(delay)
+                    continue
 
-        return self._parse_review_result(content)
+                logger.warning(
+                    "llm_request_failed",
+                    exc_info=True,
+                    extra={
+                        "props": {
+                            "event": "llm_request_failed",
+                            "model": self.model,
+                            "attempt": attempt + 1,
+                            "error_type": last_error_type,
+                            "exception_type": exc.__class__.__name__,
+                            "error_message": last_error_message,
+                        }
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "code": f"llm_{last_error_type}",
+                        "message": LLM_ERROR_MESSAGES[last_error_type],
+                    },
+                ) from exc
+
+            content = getattr(response, "content", response)
+            if not isinstance(content, str):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Model returned an unsupported response format",
+                )
+
+            return self._parse_review_result(content)
 
     def _ensure_model_configured(self) -> None:
         if not self.api_key or not self.model:
