@@ -23,50 +23,13 @@ class LLMReviewService:
         self.model = model
 
     async def analyze_mock_pr(self, request: MockReviewRequest) -> ReviewResult:
-        self._ensure_model_configured()
-
-        prompt = self._build_prompt()
         payload = self._build_review_payload(request)
-        schema = json.dumps(ReviewResult.model_json_schema(), ensure_ascii=False)
-
-        try:
-            llm = self._build_llm()
-            chain = prompt | llm
-            response = await chain.ainvoke(
-                {
-                    "schema": schema,
-                    "pr_payload": json.dumps(payload, ensure_ascii=False),
-                }
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "llm_request_failed",
-                exc_info=True,
-                extra={
-                    "props": {
-                        "event": "llm_request_failed",
-                        "model": self.model,
-                        "error_type": exc.__class__.__name__,
-                    }
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Model request failed: {exc.__class__.__name__}",
-            ) from exc
-
-        content = getattr(response, "content", response)
-        if not isinstance(content, str):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Model returned an unsupported response format",
-            )
-
-        return self._parse_review_result(content)
+        return await self._call_llm_with_payload(payload)
 
     async def analyze_payload(self, payload: dict[str, Any]) -> ReviewResult:
+        return await self._call_llm_with_payload(payload)
+
+    async def _call_llm_with_payload(self, payload: dict[str, Any]) -> ReviewResult:
         self._ensure_model_configured()
 
         prompt = self._build_prompt()
