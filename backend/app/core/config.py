@@ -15,6 +15,15 @@ class Settings(BaseSettings):
 
     github_token: str | None = Field(default=None, validation_alias="GITHUB_TOKEN")
     github_api_proxy: str | None = Field(default=None, validation_alias="GITHUB_API_PROXY")
+    review_api_token: str | None = Field(
+        default=None,
+        validation_alias="REVIEW_API_TOKEN",
+    )
+    rate_limit_requests: int = Field(default=30, validation_alias="RATE_LIMIT_REQUESTS")
+    rate_limit_window_seconds: int = Field(
+        default=60,
+        validation_alias="RATE_LIMIT_WINDOW_SECONDS",
+    )
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
     openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
@@ -24,9 +33,20 @@ class Settings(BaseSettings):
     def default_port_when_empty(cls, value: object) -> object:
         return 8000 if value == "" or value is None else value
 
+    @field_validator("rate_limit_requests", mode="before")
+    @classmethod
+    def default_rate_limit_requests_when_empty(cls, value: object) -> object:
+        return 30 if value == "" or value is None else value
+
+    @field_validator("rate_limit_window_seconds", mode="before")
+    @classmethod
+    def default_rate_limit_window_when_empty(cls, value: object) -> object:
+        return 60 if value == "" or value is None else value
+
     @field_validator(
         "github_token",
         "github_api_proxy",
+        "review_api_token",
         "openai_api_key",
         "openai_base_url",
         "openai_model",

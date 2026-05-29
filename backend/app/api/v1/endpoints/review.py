@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 
 from app.agents.graph import ReviewGraphRunner
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import require_rate_limit
+from app.core.security import require_api_token
 from app.schemas.review import (
     MockReviewRequest,
     ReviewAnalyzeRequest,
@@ -11,7 +13,11 @@ from app.schemas.review import (
 from app.services.github_pr import GitHubPRService
 from app.services.llm_review import LLMReviewService
 
-router = APIRouter(prefix="/review", tags=["review"])
+router = APIRouter(
+    prefix="/review",
+    tags=["review"],
+    dependencies=[Depends(require_api_token), Depends(require_rate_limit)],
+)
 
 
 @router.post("/mock-analyze", response_model=ReviewResult)

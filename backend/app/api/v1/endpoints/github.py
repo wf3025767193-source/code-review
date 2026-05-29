@@ -1,10 +1,16 @@
 from fastapi import APIRouter, Depends
 
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import require_rate_limit
+from app.core.security import require_api_token
 from app.schemas.github import GitHubPR, GitHubPRRequest
 from app.services.github_pr import GitHubPRService
 
-router = APIRouter(prefix="/github", tags=["github"])
+router = APIRouter(
+    prefix="/github",
+    tags=["github"],
+    dependencies=[Depends(require_api_token), Depends(require_rate_limit)],
+)
 
 
 @router.post("/pr", response_model=GitHubPR)
