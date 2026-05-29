@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     github_token: str | None = Field(default=None, validation_alias="GITHUB_TOKEN")
+    github_api_proxy: str | None = Field(default=None, validation_alias="GITHUB_API_PROXY")
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
     openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "github_token",
+        "github_api_proxy",
         "openai_api_key",
         "openai_base_url",
         "openai_model",
