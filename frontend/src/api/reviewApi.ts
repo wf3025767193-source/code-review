@@ -1,7 +1,6 @@
 import type { ReviewAnalyzeResponse } from "../types/review";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
-const REVIEW_API_TOKEN = import.meta.env.VITE_REVIEW_API_TOKEN;
 const DEFAULT_TIMEOUT_MS = 120000;
 
 interface ApiErrorBody {
@@ -21,10 +20,6 @@ export async function analyzePullRequest(
   prUrl: string,
   options: AnalyzeOptions = {},
 ): Promise<ReviewAnalyzeResponse> {
-  if (!REVIEW_API_TOKEN) {
-    throw new Error("VITE_REVIEW_API_TOKEN 未配置");
-  }
-
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let timeoutId: ReturnType<typeof window.setTimeout> | undefined;
@@ -54,7 +49,6 @@ export async function analyzePullRequest(
     response = await fetch(`${API_BASE_URL}/review/analyze`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${REVIEW_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ prUrl }),
