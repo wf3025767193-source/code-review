@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     github_token: str | None = Field(default=None, validation_alias="GITHUB_TOKEN")
     github_api_proxy: str | None = Field(default=None, validation_alias="GITHUB_API_PROXY")
+    review_api_token: str | None = Field(
+        default=None,
+        validation_alias="REVIEW_API_TOKEN",
+    )
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
     openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
@@ -27,6 +31,7 @@ class Settings(BaseSettings):
     @field_validator(
         "github_token",
         "github_api_proxy",
+        "review_api_token",
         "openai_api_key",
         "openai_base_url",
         "openai_model",
