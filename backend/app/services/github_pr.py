@@ -1,0 +1,176 @@
+import re
+from collections.abc import Sequence
+from typing import Any
+
+import httpx
+from fastapi import HTTPException, status
+
+from app.schemas.github import GitHubPR, GitHubPRFile
+
+GITHUB_PR_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)(?:[/?#].*)?$"
+)
+
+
+class GitHubPRService:
+    def __init__(
+        self,
+        token: str | None = None,
+        proxy: str | None = None,
+    ) -> None:
+        self.token = token
+        self.proxy = proxy
+        self.base_url = "https://api.github.com"
+
+    def parse_pr_url(self, url: str) -> tuple[str, str, int]:
+        match = GITHUB_PR_URL_RE.match(url)
+        if not match:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid GitHub PR URL",
+            )
+
+        return (
+            match.group("owner"),
+            match.group("repo"),
+            int(match.group("number")),
+        )
+
+    async def fetch_pr(self, url: str) -> GitHubPR:
+        owner, repo, number = self.parse_pr_url(url)
+        headers = self._build_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=20, proxy=self.proxy) as client:
+                pr_data = await self._get_json(
+                    client,
+                    f"/repos/{owner}/{repo}/pulls/{number}",
+                    headers,
+                )
+                files_data = await self._get_paginated_json(
+                    client,
+                    f"/repos/{owner}/{repo}/pulls/{number}/files",
+                    headers,
+                )
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to connect to GitHub API",
+            ) from exc
+
+        return GitHubPR(
+            owner=owner,
+            repo=repo,
+            number=number,
+            title=pr_data["title"],
+            body=pr_data.get("body"),
+            state=pr_data["state"],
+            author=pr_data["user"]["login"],
+            html_url=pr_data["html_url"],
+            base_branch=pr_data["base"]["ref"],
+            head_branch=pr_data["head"]["ref"],
+            changed_files=pr_data["changed_files"],
+            additions=pr_data["additions"],
+            deletions=pr_data["deletions"],
+            files=[
+                GitHubPRFile(
+                    filename=file_data["filename"],
+                    status=file_data["status"],
+                    additions=file_data["additions"],
+                    deletions=file_data["deletions"],
+                    changes=file_data["changes"],
+                    patch=file_data.get("patch"),
+                )
+                for file_data in files_data
+            ],
+        )
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "ai-code-review-backend",
+        }
+
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        return headers
+
+    async def _get_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = await client.get(
+            f"{self.base_url}{path}",
+            headers=headers,
+            params=params,
+        )
+        self._raise_for_github_error(response)
+        data = response.json()
+        if not isinstance(data, dict):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unexpected GitHub API response",
+            )
+        return data
+
+    async def _get_paginated_json(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        headers: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        page = 1
+        items: list[dict[str, Any]] = []
+
+        while True:
+            response = await client.get(
+                f"{self.base_url}{path}",
+                headers=headers,
+                params={"page": page, "per_page": 100},
+            )
+            self._raise_for_github_error(response)
+            data = response.json()
+            if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unexpected GitHub API response",
+                )
+
+            page_items = [item for item in data if isinstance(item, dict)]
+            items.extend(page_items)
+
+            if len(page_items) < 100:
+                return items
+            page += 1
+
+    def _raise_for_github_error(self, response: httpx.Response) -> None:
+        if response.status_code == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="GitHub PR not found or token has no access",
+            )
+
+        if response.status_code == status.HTTP_401_UNAUTHORIZED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid GitHub token",
+            )
+
+        if response.status_code == status.HTTP_403_FORBIDDEN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="GitHub API access forbidden or rate limited",
+            )
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"GitHub API request failed: {exc.response.status_code}",
+            ) from exc

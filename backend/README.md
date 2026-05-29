@@ -23,3 +23,23 @@ Health check:
 GET http://localhost:8000/api/v1/health
 ```
 
+## GitHub PR API
+
+Fetch pull request metadata and changed files:
+
+```text
+POST http://localhost:8000/api/v1/github/pr
+Content-Type: application/json
+
+{
+  "url": "https://github.com/owner/repo/pull/123"
+}
+```
+
+Private repositories require `GITHUB_TOKEN` in `.env`.
+
+If your browser can access GitHub but the backend cannot, configure an HTTP proxy:
+
+```env
+GITHUB_API_PROXY=http://127.0.0.1:7890
+```
