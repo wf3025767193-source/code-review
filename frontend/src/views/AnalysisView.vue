@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { ElMessage } from "element-plus";
+import { printPdf } from "../utils/printPdf";
 import { riskLabel, usePrAnalysis } from "../composables/usePrAnalysis";
 import { useReviewReport } from "../composables/useReviewReport";
 import SearchPanel from "../components/SearchPanel.vue";
@@ -126,6 +127,7 @@ const renderMarkdownReport = (markdown: string) => {
   <main class="workspace">
     <section class="hero-row">
       <SearchPanel
+        class="no-print"
         :pr-url="analysis.prUrl.value"
         :is-analyzing="analysis.isAnalyzing.value"
         :analysis-status="analysis.analysisStatus.value"
@@ -162,6 +164,7 @@ const renderMarkdownReport = (markdown: string) => {
         </div>
       </el-popover>
       <el-tag v-else type="success" effect="plain">快速分析</el-tag>
+      <el-button class="no-print" @click="printPdf">导出 PDF</el-button>
     </section>
 
     <section class="dashboard-grid">
@@ -196,6 +199,7 @@ const renderMarkdownReport = (markdown: string) => {
 
       <aside class="right-column">
         <AISummaryPanel
+          class="no-print"
           :summary-stats="analysis.aiSummaryStats.value"
           :top-issues="analysis.topIssues.value"
           :risk-label="riskLabel"
