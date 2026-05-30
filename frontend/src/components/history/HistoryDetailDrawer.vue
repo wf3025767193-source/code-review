@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { CircleCheck, CircleClose, Warning } from "@element-plus/icons-vue";
+import { printPdf } from "../../utils/printPdf";
 import type { FeedbackRating, ReviewRecordDetail } from "../../types/history";
 import { riskLabel, riskTotal } from "../../composables/useReviewHistory";
 
@@ -24,6 +25,9 @@ const emit = defineEmits<{
     @update:model-value="emit('update:visible', $event)"
   >
     <div v-loading="loading" class="record-detail">
+      <div class="drawer-toolbar no-print">
+        <el-button @click="printPdf">导出 PDF</el-button>
+      </div>
       <template v-if="record">
         <section class="detail-summary">
           <h3>{{ record.pr_title || "未命名 PR" }}</h3>
@@ -50,7 +54,7 @@ const emit = defineEmits<{
             </div>
             <strong>{{ risk.issue }}</strong>
               <p>{{ risk.suggestion }}</p>
-              <div class="feedback-actions">
+              <div class="feedback-actions no-print">
                 <el-button
                   size="small"
                   type="success"
@@ -90,6 +94,12 @@ const emit = defineEmits<{
 
 <style scoped lang="scss">
 @use "../../styles/variables" as *;
+
+.drawer-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
 
 .record-detail {
   min-height: 240px;

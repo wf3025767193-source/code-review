@@ -10,7 +10,9 @@
       "Bash(python -m pytest tests/ -v --ignore=tests/test_auth_endpoints.py --tb=line)",
       "Bash(python -m compileall app/)",
       "Bash(python *)",
-      "Bash(dir *)"
+      "Bash(dir *)",
+      "Bash(Test-Path D:\\\\Experiment\\\\program\\\\code-review\\\\frontend\\\\src\\\\styles *)",
+      "Bash(npx vue-tsc *)"
     ]
   }
 }

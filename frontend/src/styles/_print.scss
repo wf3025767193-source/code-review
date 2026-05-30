@@ -1,0 +1,22 @@
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  * {
+    box-shadow: none !important;
+  }
+
+  .el-drawer__body {
+    overflow: visible !important;
+  }
+
+  .collapsed {
+    display: block !important;
+  }
+}
