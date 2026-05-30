@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 
 from app.agents.review.aggregator import detect_conflicts, merge_results
 from app.agents.review.context import ReviewContextBuilder
@@ -18,10 +19,10 @@ from app.services.llm.service import LLMReviewService
 
 logger = logging.getLogger(__name__)
 
-SINGLE_MAX_FILES = 3
-SINGLE_MAX_LINES = 1000
-MULTI_MIN_FILES = 10
-MULTI_MIN_LINES = 5000
+SINGLE_MAX_FILES = 2
+SINGLE_MAX_LINES = 300
+MULTI_MIN_FILES = 4
+MULTI_MIN_LINES = 1000
 
 
 def _should_use_multi_agent(pr_data: GitHubPR) -> bool:
@@ -57,7 +58,11 @@ async def _run_single_agent_for(
         base_url=settings.openai_base_url,
         model=agent.model,
     )
-    result = await llm.analyze_payload(context, system_prompt=agent.system_prompt)
+    result = await llm.analyze_payload(
+        context,
+        system_prompt=agent.system_prompt,
+        stage=f"agent:{agent.name}",
+    )
     return agent.category_prefix, result
 
 
@@ -78,14 +83,16 @@ async def _phase1_analyze_pr(pr_data: GitHubPR) -> dict | None:
             base_url=settings.openai_base_url,
             model=settings.deep_model,
         )
-        wrapper = {"pr_payload": json.dumps(phase1_payload, ensure_ascii=False)}
-        result = await llm.analyze_payload(wrapper, system_prompt=PHASE1_PROMPT)
-        focus_notes = json.loads(result.summary.overview)
+        focus_notes = await llm.analyze_json_payload(
+            phase1_payload,
+            system_prompt=PHASE1_PROMPT,
+            stage="phase1",
+        )
         logger.info(
             "阶段1完成",
             extra={"props": {
-                "安全重点": focus_notes.get("security_focus", "")[:40],
-                "性能重点": focus_notes.get("performance_focus", "")[:40],
+                "安全重点": str(focus_notes.get("security_focus", ""))[:40],
+                "性能重点": str(focus_notes.get("performance_focus", ""))[:40],
             }},
         )
         return focus_notes
@@ -122,11 +129,14 @@ async def _phase2_summarize(
             base_url=settings.openai_base_url,
             model=settings.deep_model,
         )
-        wrapper = {"pr_payload": json.dumps(summary_data, ensure_ascii=False)}
-        result = await llm.analyze_payload(wrapper, system_prompt=PHASE2_PROMPT)
-        phase2_data = json.loads(result.summary.overview)
-        merged_response.analysis.summary.overview = phase2_data.get("overview", "")
-        merged_response.analysis.summary.impact = phase2_data.get("impact", [])
+        phase2_data = await llm.analyze_json_payload(
+            summary_data,
+            system_prompt=PHASE2_PROMPT,
+            stage="phase2",
+        )
+        merged_response.analysis.summary.overview = str(phase2_data.get("overview", ""))
+        impact = phase2_data.get("impact", [])
+        merged_response.analysis.summary.impact = impact if isinstance(impact, list) else []
     except Exception:
         logger.warning("阶段2失败，使用合并摘要", exc_info=True)
 
@@ -138,6 +148,7 @@ async def _run_multi_agent(
     pr_data: GitHubPR,
     context_builder,
     pr_url: str,
+    on_progress: Callable | None = None,
 ) -> ReviewAnalyzeResponse:
     started_at = time.perf_counter()
 
@@ -149,29 +160,80 @@ async def _run_multi_agent(
 
     # Wait for Phase 1
     focus_notes = await focus_notes_task
+    if focus_notes:
+        for ctx in contexts.values():
+            ctx["focusNotes"] = focus_notes
+
+    if on_progress:
+        await on_progress("phase_done", phase="phase1", percent=10)
+
+    if on_progress:
+        await on_progress("phase_start", phase="phase2", message="启动专家分析", percent=10)
 
     # Run 3 agents in parallel
     tasks = []
+    active_agents = []
     for agent in MULTI_AGENTS:
         ctx = contexts.get(agent.name, {"files": [], "file_count": 0})
+        if not ctx.get("files"):
+            logger.info(
+                "跳过无可分析diff的Agent",
+                extra={"props": {"agent": agent.name, "stage": f"agent:{agent.name}"}},
+            )
+            if on_progress:
+                await on_progress(
+                    "agent_skipped",
+                    agent=agent.category_prefix,
+                    message="没有可分析的 diff 内容",
+            )
+            continue
+        active_agents.append(agent)
         tasks.append(_run_single_agent_for(agent, ctx))
 
     agent_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Collect valid results
     valid_results: list[tuple[str, ReviewResult]] = []
-    for agent, result in zip(MULTI_AGENTS, agent_results):
+    for agent, result in zip(active_agents, agent_results):
         if isinstance(result, Exception):
-            logger.error("Agent失败 | agent=%s error=%s", agent.name, result)
+            logger.error(
+                "Agent失败",
+                exc_info=result,
+                extra={
+                    "props": {
+                        "agent": agent.name,
+                        "stage": f"agent:{agent.name}",
+                        "error_type": type(result).__name__,
+                        "error": str(result)[:500],
+                    }
+                },
+            )
+            if on_progress:
+                await on_progress(
+                    "agent_error",
+                    agent=agent.category_prefix,
+                    message=str(result)[:200],
+                )
             continue
         valid_results.append(result)
 
     if not valid_results:
-        raise RuntimeError("All specialist agents failed")
+        errors = [
+            {
+                "agent": agent.name,
+                "error_type": type(result).__name__,
+                "message": str(result)[:500],
+            }
+            for agent, result in zip(active_agents, agent_results)
+            if isinstance(result, Exception)
+        ]
+        raise RuntimeError(f"All specialist agents failed: {json.dumps(errors, ensure_ascii=False)}")
 
     for _agent, r in valid_results:
         m = r.metrics
         total_risks = m.highRiskCount + m.mediumRiskCount + m.lowRiskCount
+        if on_progress:
+            await on_progress("agent_done", agent=_agent, risks=total_risks, high=m.highRiskCount)
         logger.info(
             "%sAgent完成",
             _agent,
@@ -194,9 +256,16 @@ async def _run_multi_agent(
     )
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
+
+    if on_progress:
+        await on_progress("phase_start", phase="phase3", message="合并结果并生成报告", percent=85)
+
     merged = merge_results(valid_results, pr_info, duration_ms)
     conflicts = detect_conflicts(merged.analysis.risks)
     merged = await _phase2_summarize(merged, conflicts)
+
+    if on_progress:
+        await on_progress("phase_done", phase="phase3", percent=100)
 
     final_m = merged.analysis.metrics
     total_risks = final_m.highRiskCount + final_m.mediumRiskCount + final_m.lowRiskCount
@@ -212,7 +281,9 @@ class ReviewOrchestrator:
     def __init__(self, github_service: GitHubPRService):
         self.github_service = github_service
 
-    async def analyze(self, pr_url: str, pr_data: GitHubPR) -> ReviewAnalyzeResponse:
+    async def analyze(
+        self, pr_url: str, pr_data: GitHubPR, on_progress: Callable | None = None
+    ) -> ReviewAnalyzeResponse:
         if _should_use_multi_agent(pr_data):
             logger.info(
                 "使用多Agent分析",
@@ -220,7 +291,7 @@ class ReviewOrchestrator:
             )
             context_builder = ReviewContextBuilder()
             return await _run_multi_agent(
-                self.github_service, pr_data, context_builder, pr_url
+                self.github_service, pr_data, context_builder, pr_url, on_progress=on_progress
             )
 
         logger.info(
