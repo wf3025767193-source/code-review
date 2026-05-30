@@ -23,6 +23,7 @@ import type {
   CodeLine,
   GitHubPRFile,
   AuthSession,
+  ReviewAnalyzeResponse,
 } from "./types/review";
 import {
   normalizeGitHubPrUrl,
@@ -70,6 +71,9 @@ const authEmail = ref("");
 const authPassword = ref("");
 const authLoading = ref(false);
 const activeView = ref<AppView>("analysis");
+const currentAnalysis = ref<ReviewAnalyzeResponse | null>(null);
+const reportDialogVisible = ref(false);
+const reportMarkdown = ref("");
 
 const navItems = computed<NavItem[]>(() => [
   { key: "analysis", label: "PR 分析", icon: DataAnalysis, active: activeView.value === "analysis" },
@@ -269,6 +273,99 @@ const updateSelectedCodeFile = (path: string) => {
     : [{ line: 1, mark: " ", code: file ? "该文件没有可展示的 patch 内容" : "暂无代码变更内容" }];
 };
 
+const severityText: Record<RiskLevel, string> = {
+  high: "高风险",
+  medium: "中风险",
+  low: "低风险",
+};
+
+const buildReviewReportMarkdown = () => {
+  const data = currentAnalysis.value;
+  const summary = data?.analysis.summary;
+  const risks = data?.analysis.risks || [];
+  const suggestions = data?.analysis.suggestions || [];
+  const metrics = data?.analysis.metrics;
+  const pr = data?.pr;
+
+  const lines = [
+    `# ${pr?.title || pullRequest.value.title}`,
+    "",
+    "## PR 信息",
+    `- 仓库：${pr ? `${pr.owner}/${pr.repo}` : pullRequest.value.repository}`,
+    `- PR：${pr?.url || analyzedUrl.value}`,
+    `- 作者：${pr?.author || pullRequest.value.author}`,
+    `- 分支：${pr?.headBranch || pullRequest.value.sourceBranch} -> ${pr?.baseBranch || pullRequest.value.targetBranch}`,
+    `- 变更：${pr?.changedFiles ?? pullRequest.value.changedFiles} 个文件，+${pr?.additions ?? pullRequest.value.additions} / -${pr?.deletions ?? pullRequest.value.deletions}`,
+    "",
+    "## 总结",
+    summary?.overview || pullRequest.value.description,
+    "",
+    "## 风险统计",
+    `- 高风险：${metrics?.highRiskCount ?? riskStats.value.high}`,
+    `- 中风险：${metrics?.mediumRiskCount ?? riskStats.value.medium}`,
+    `- 低风险：${metrics?.lowRiskCount ?? riskStats.value.low}`,
+    "",
+    "## 变更模块",
+    ...(summary?.changedModules?.length
+      ? summary.changedModules.map((module) => `- ${module}`)
+      : summaryItems.value.map((item) => `- ${item.text}`)),
+    "",
+    "## 风险问题",
+    ...(risks.length
+      ? risks.map((risk, index) => [
+          `### ${index + 1}. ${risk.issue}`,
+          `- 级别：${severityText[risk.severity]}`,
+          `- 位置：${risk.file}${risk.line ? `:${risk.line}` : ""}`,
+          `- 影响：${risk.impact}`,
+          `- 建议：${risk.suggestion}`,
+        ].join("\n"))
+      : topIssues.value.map((issue, index) => `### ${index + 1}. ${issue.title}\n- 级别：${severityText[issue.level]}\n- 位置：${issue.file}`)),
+    "",
+    "## Review 建议",
+    ...(suggestions.length
+      ? suggestions.map((suggestion, index) => `${index + 1}. [${suggestion.type}] ${suggestion.file}：${suggestion.comment}`)
+      : aiSuggestions.value.map((suggestion, index) => `${index + 1}. ${suggestion.title}：${suggestion.description}`)),
+    "",
+  ];
+
+  return lines.join("\n");
+};
+
+const reportFileName = () => {
+  const repo = (currentAnalysis.value?.pr.repo || pullRequest.value.repository || "review")
+    .replace(/[^\w.-]+/g, "-");
+  const number = currentAnalysis.value?.pr.number ? `-${currentAnalysis.value.pr.number}` : "";
+  return `${repo}${number}-review-report.md`;
+};
+
+const downloadTextFile = (content: string, fileName: string) => {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const handleGenerateReport = () => {
+  reportMarkdown.value = buildReviewReportMarkdown();
+  reportDialogVisible.value = true;
+};
+
+const handleExportResult = () => {
+  const markdown = buildReviewReportMarkdown();
+  downloadTextFile(markdown, reportFileName());
+  ElMessage.success("分析结果已导出");
+};
+
+const copyReport = async () => {
+  await navigator.clipboard.writeText(reportMarkdown.value);
+  ElMessage.success("报告已复制");
+};
+
 const handleAnalyze = async () => {
   const nextUrl = normalizeGitHubPrUrl(prUrl.value);
 
@@ -299,6 +396,7 @@ const handleAnalyze = async () => {
     ]);
     const mapped = mapAnalyzeResponse(data);
 
+    currentAnalysis.value = data;
     prFiles.value = githubPR.files;
     pullRequest.value = {
       ...pullRequest.value,
@@ -400,6 +498,8 @@ const handleAnalyze = async () => {
             :summary-stats="aiSummaryStats"
             :top-issues="topIssues"
             :risk-label="riskLabel"
+            @generate-report="handleGenerateReport"
+            @export-result="handleExportResult"
           />
         </aside>
       </section>
@@ -456,6 +556,27 @@ const handleAnalyze = async () => {
           <el-button class="auth-primary" type="primary" :loading="authLoading" @click="handleAuthSubmit">
             {{ authMode === "login" ? "登录" : "注册" }}
           </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="reportDialogVisible"
+      class="report-dialog"
+      title="完整 Review 报告"
+      width="680px"
+      append-to-body
+    >
+      <el-input
+        v-model="reportMarkdown"
+        type="textarea"
+        :rows="18"
+        resize="none"
+      />
+      <template #footer>
+        <div class="report-footer">
+          <el-button @click="copyReport">复制报告</el-button>
+          <el-button class="auth-primary" type="primary" @click="handleExportResult">导出 Markdown</el-button>
         </div>
       </template>
     </el-dialog>
@@ -556,6 +677,17 @@ const handleAnalyze = async () => {
 .auth-primary {
   border: 0;
   background: $primary-gradient;
+}
+
+:global(.report-dialog .el-textarea__inner) {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.6;
+}
+
+.report-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 @media (max-width: 1440px) {

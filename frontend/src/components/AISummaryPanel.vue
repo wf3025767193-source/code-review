@@ -7,6 +7,11 @@ defineProps<{
   topIssues: Issue[];
   riskLabel: Record<RiskLevel, string>;
 }>();
+
+const emit = defineEmits<{
+  "generate-report": [];
+  "export-result": [];
+}>();
 </script>
 
 <template>
@@ -34,8 +39,10 @@ defineProps<{
       </article>
     </div>
     <div class="summary-actions">
-      <el-button class="primary-button" type="primary" :icon="Promotion">生成完整 Review 报告</el-button>
-      <el-button :icon="Download">导出分析结果</el-button>
+      <el-button class="primary-button" type="primary" :icon="Promotion" @click="emit('generate-report')">
+        生成完整 Review 报告
+      </el-button>
+      <el-button :icon="Download" @click="emit('export-result')">导出分析结果</el-button>
     </div>
   </el-card>
 </template>
