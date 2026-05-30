@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { UserFilled } from "@element-plus/icons-vue";
-import type { NavItem } from "../types/review";
+import { SwitchButton, UserFilled } from "@element-plus/icons-vue";
+import type { AuthUser, NavItem } from "../types/review";
 
 defineProps<{
   navItems: NavItem[];
+  user: AuthUser | null;
+}>();
+
+const emit = defineEmits<{
+  login: [];
+  register: [];
+  logout: [];
 }>();
 </script>
 
@@ -26,12 +33,17 @@ defineProps<{
 
     <div class="side-spacer" />
 
-    <div class="profile">
+    <div v-if="user" class="profile">
       <span class="profile-avatar"><el-icon><UserFilled /></el-icon></span>
       <div>
-        <strong>李明</strong>
+        <strong>{{ user.email.split("@")[0] }}</strong>
         <em>开发工程师</em>
       </div>
+      <el-button class="logout-button" text :icon="SwitchButton" @click="emit('logout')" />
+    </div>
+    <div v-else class="auth-actions">
+      <el-button class="login-button" type="primary" @click="emit('login')">登录</el-button>
+      <el-button @click="emit('register')">注册</el-button>
     </div>
   </aside>
 </template>
@@ -134,14 +146,22 @@ defineProps<{
   padding-top: 16px;
   border-top: 1px solid $border;
 
+  div {
+    min-width: 0;
+    flex: 1;
+  }
+
   strong,
   em {
     display: block;
   }
 
   strong {
+    overflow: hidden;
     color: $text;
     font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   em {
@@ -160,5 +180,23 @@ defineProps<{
   border-radius: 50%;
   color: #1d4ed8;
   background: #dbeafe;
+}
+
+.logout-button {
+  flex: 0 0 auto;
+  color: $muted;
+}
+
+.auth-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid $border;
+}
+
+.login-button {
+  border: 0;
+  background: $primary-gradient;
 }
 </style>
