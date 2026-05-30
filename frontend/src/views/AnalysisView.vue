@@ -9,6 +9,7 @@ import SummaryCard from "../components/SummaryCard.vue";
 import RiskCard from "../components/RiskCard.vue";
 import DiffViewer from "../components/DiffViewer.vue";
 import AISummaryPanel from "../components/AISummaryPanel.vue";
+import AnalysisProgress from "../components/AnalysisProgress.vue";
 
 const props = defineProps<{
   apiBaseUrl: string;
@@ -135,7 +136,32 @@ const renderMarkdownReport = (markdown: string) => {
         @analyze="analysis.handleAnalyze"
         @update:pr-url="analysis.prUrl.value = $event"
       />
-      <PRInfoCard :pull-request="analysis.pullRequest.value" />
+      <PRInfoCard :pull-request="analysis.pullRequest.value" :languages="analysis.languages.value" />
+    </section>
+
+    <AnalysisProgress
+      v-if="analysis.showAsyncProgress.value"
+      :progress-state="analysis.progressState"
+    />
+
+    <section v-if="analysis.currentAnalysis.value" class="analysis-mode-row">
+      <el-popover
+        v-if="analysis.analysisMode.value === 'multi'"
+        placement="bottom-start"
+        width="260"
+        trigger="hover"
+      >
+        <template #reference>
+          <el-tag type="primary" effect="plain">深度分析 · 3 专家</el-tag>
+        </template>
+        <div class="mode-popover">
+          <p v-for="source in ['安全', '性能', '风格']" :key="source">
+            {{ source }}专家：发现 {{ analysis.agentStats.value[source]?.risks || 0 }} 个风险（{{ analysis.agentStats.value[source]?.high || 0 }} 高危）
+          </p>
+          <p>耗时 {{ analysis.analysisDuration.value.toFixed(1) }}s</p>
+        </div>
+      </el-popover>
+      <el-tag v-else type="success" effect="plain">快速分析</el-tag>
     </section>
 
     <section class="dashboard-grid">
@@ -150,6 +176,11 @@ const renderMarkdownReport = (markdown: string) => {
           :risk-files="analysis.riskFiles.value"
           :risk-stats="analysis.riskStats.value"
           :selected-risk-path="analysis.selectedRiskPath.value"
+          :risks="analysis.currentAnalysis.value?.analysis.risks || []"
+          :record-id="analysis.currentRecordId.value"
+          :feedback-state="analysis.feedbackState.value"
+          :agent-stats="analysis.agentStats.value"
+          @feedback="analysis.sendAnalysisFeedback"
         />
       </div>
 
@@ -255,6 +286,24 @@ const renderMarkdownReport = (markdown: string) => {
 
   :deep(li::marker) {
     color: $primary;
+  }
+}
+
+.analysis-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 32px;
+}
+
+.mode-popover {
+  display: grid;
+  gap: 7px;
+
+  p {
+    margin: 0;
+    color: $muted;
+    font-size: 12px;
   }
 }
 </style>

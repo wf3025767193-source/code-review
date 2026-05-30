@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CircleCheck, CircleClose, Warning } from "@element-plus/icons-vue";
 import type { FeedbackRating, ReviewRecordDetail } from "../../types/history";
 import { riskLabel, riskTotal } from "../../composables/useReviewHistory";
 
@@ -48,13 +49,37 @@ const emit = defineEmits<{
               <span>{{ risk.file }}{{ risk.line ? `:${risk.line}` : "" }}</span>
             </div>
             <strong>{{ risk.issue }}</strong>
-            <p>{{ risk.suggestion }}</p>
-            <div class="feedback-actions">
-              <el-button size="small" @click="emit('feedback', index, 'helpful')">有用</el-button>
-              <el-button size="small" @click="emit('feedback', index, 'not_helpful')">无用</el-button>
-              <el-button size="small" @click="emit('feedback', index, 'false_positive')">误报</el-button>
-              <em v-if="feedbackState[`${record.id}-${index}`]">已反馈</em>
-            </div>
+              <p>{{ risk.suggestion }}</p>
+              <div class="feedback-actions">
+                <el-button
+                  size="small"
+                  type="success"
+                  :icon="CircleCheck"
+                  :disabled="Boolean(feedbackState[`${record.id}-${index}`])"
+                  @click="emit('feedback', index, 'helpful')"
+                >
+                  有用
+                </el-button>
+                <el-button
+                  size="small"
+                  type="warning"
+                  :icon="CircleClose"
+                  :disabled="Boolean(feedbackState[`${record.id}-${index}`])"
+                  @click="emit('feedback', index, 'not_helpful')"
+                >
+                  无用
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  :icon="Warning"
+                  :disabled="Boolean(feedbackState[`${record.id}-${index}`])"
+                  @click="emit('feedback', index, 'false_positive')"
+                >
+                  误报
+                </el-button>
+                <em v-if="feedbackState[`${record.id}-${index}`]">已反馈</em>
+              </div>
           </article>
           <p v-if="(record.result_json?.analysis.risks || []).length === 0" class="empty-detail">暂无可反馈的风险建议</p>
         </section>

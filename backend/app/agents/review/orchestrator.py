@@ -10,6 +10,7 @@ from app.agents.review.context import ReviewContextBuilder
 from app.agents.review.graph import ReviewGraphRunner
 from app.agents.review.prompts.orchestrator_phase1 import SYSTEM_PROMPT as PHASE1_PROMPT
 from app.agents.review.prompts.orchestrator_phase2 import SYSTEM_PROMPT as PHASE2_PROMPT
+from app.agents.review.prompts.language_rules import build_language_rules
 from app.agents.review.specialist import MULTI_AGENTS, SpecialistAgent
 from app.core.config import settings
 from app.schemas.github import GitHubPR
@@ -69,6 +70,7 @@ async def _run_single_agent_for(
 async def _phase1_analyze_pr(pr_data: GitHubPR) -> dict | None:
     try:
         languages = list({f.filename.split(".")[-1] for f in pr_data.files if "." in f.filename})
+        lang_rules = build_language_rules(languages)
         file_list = [f.filename for f in pr_data.files[:20]]
         phase1_payload = {
             "pr_title": pr_data.title,
@@ -77,6 +79,7 @@ async def _phase1_analyze_pr(pr_data: GitHubPR) -> dict | None:
             "deletions": pr_data.deletions,
             "languages": languages,
             "file_list": file_list,
+            "language_rules": lang_rules,
         }
         llm = LLMReviewService(
             api_key=settings.openai_api_key,
@@ -98,7 +101,14 @@ async def _phase1_analyze_pr(pr_data: GitHubPR) -> dict | None:
         return focus_notes
     except Exception:
         logger.warning("阶段1失败，继续无焦点分析", exc_info=True)
-        return None
+        return {
+            "high_risk_areas": [],
+            "attention_files": [],
+            "security_focus": lang_rules.get("security", ""),
+            "performance_focus": lang_rules.get("performance", ""),
+            "style_focus": lang_rules.get("style", ""),
+            "global_context": "",
+        }
 
 
 async def _phase2_summarize(

@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { WarningFilled } from "@element-plus/icons-vue";
-import type { RiskFile, RiskStats } from "../types/review";
+import { CircleCheck, CircleClose, Warning, WarningFilled } from "@element-plus/icons-vue";
+import { stripAgentPrefix, extractAgentSource } from "../mappers/reviewMapper";
+import type { AgentStats, ReviewRisk, RiskFile, RiskStats } from "../types/review";
+import type { FeedbackRating } from "../types/history";
 
 const props = defineProps<{
   riskFiles: RiskFile[];
   riskStats: RiskStats;
   selectedRiskPath: string;
+  risks: ReviewRisk[];
+  recordId: number | null;
+  feedbackState: Record<string, FeedbackRating>;
+  agentStats: Record<string, AgentStats>;
+}>();
+
+const emit = defineEmits<{
+  feedback: [riskIndex: number, rating: FeedbackRating];
 }>();
 
 const selectedRiskFile = computed(() =>
@@ -30,6 +40,13 @@ const donutStyle = computed(() => {
       `conic-gradient(#ef4444 0 ${high}%, #f59e0b ${high}% ${medium}%, #315efb ${medium}% 100%)`,
   };
 });
+
+const sourceTagType = (source: string) => {
+  if (source === "安全") return "danger";
+  if (source === "性能") return "warning";
+  if (source === "风格") return "primary";
+  return "info";
+};
 </script>
 
 <template>
@@ -49,6 +66,54 @@ const donutStyle = computed(() => {
       <span><i class="high" />高风险 {{ riskStats.high }}</span>
       <span><i class="medium" />中风险 {{ riskStats.medium }}</span>
       <span><i class="low" />低风险 {{ riskStats.low }}</span>
+    </div>
+    <div class="agent-stats">
+      <span v-for="source in ['安全', '性能', '风格']" :key="source">
+        {{ source }} {{ agentStats[source]?.risks || 0 }} / 高危 {{ agentStats[source]?.high || 0 }}
+      </span>
+    </div>
+    <div v-if="risks.length" class="risk-list">
+      <article v-for="(risk, index) in risks.slice(0, 3)" :key="`${risk.file}-${index}`">
+        <header>
+          <el-tag size="small" :type="sourceTagType(extractAgentSource(risk.issue))">
+            {{ extractAgentSource(risk.issue) }}
+          </el-tag>
+          <el-tag size="small" :type="risk.severity === 'high' ? 'danger' : risk.severity === 'medium' ? 'warning' : 'success'">
+            {{ risk.severity === "high" ? "高风险" : risk.severity === "medium" ? "中风险" : "低风险" }}
+          </el-tag>
+        </header>
+        <strong>{{ stripAgentPrefix(risk.issue) }}</strong>
+        <p>{{ risk.file }}{{ risk.line ? `:${risk.line}` : "" }}</p>
+        <div v-if="recordId" class="feedback-actions">
+          <el-button
+            size="small"
+            type="success"
+            :icon="CircleCheck"
+            :disabled="Boolean(feedbackState[`${recordId}-${index}`])"
+            @click="emit('feedback', index, 'helpful')"
+          >
+            有用
+          </el-button>
+          <el-button
+            size="small"
+            type="warning"
+            :icon="CircleClose"
+            :disabled="Boolean(feedbackState[`${recordId}-${index}`])"
+            @click="emit('feedback', index, 'not_helpful')"
+          >
+            无用
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            :icon="Warning"
+            :disabled="Boolean(feedbackState[`${recordId}-${index}`])"
+            @click="emit('feedback', index, 'false_positive')"
+          >
+            误报
+          </el-button>
+        </div>
+      </article>
     </div>
   </el-card>
 </template>
@@ -79,9 +144,9 @@ h3 { font-size: 15px; font-weight: 800; }
 
 .risk-card :deep(.el-card__body) {
   display: grid;
-  grid-template-rows: auto auto auto auto;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
   align-content: start;
-  gap: 14px;
+  gap: 12px;
 }
 
 .risk-focus {
@@ -150,5 +215,60 @@ h3 { font-size: 15px; font-weight: 800; }
   .high { background: $danger; }
   .medium { background: $warning; }
   .low { background: $primary; }
+}
+
+.agent-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  color: $soft;
+  font-size: 10px;
+
+  span {
+    overflow: hidden;
+    padding: 5px 6px;
+    border: 1px solid $line;
+    border-radius: 7px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: #fbfdff;
+  }
+}
+
+.risk-list {
+  display: grid;
+  gap: 9px;
+  min-height: 0;
+  overflow-y: auto;
+
+  article {
+    display: grid;
+    gap: 6px;
+    padding: 9px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: #fbfdff;
+  }
+
+  header,
+  .feedback-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  strong {
+    color: $text;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  p {
+    margin: 0;
+    color: $soft;
+    font-size: 11px;
+    word-break: break-all;
+  }
 }
 </style>

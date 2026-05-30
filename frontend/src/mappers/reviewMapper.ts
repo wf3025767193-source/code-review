@@ -7,6 +7,7 @@ import type {
   RiskFile,
   SummaryItem,
   ReviewAnalyzeResponse,
+  AgentSource,
 } from "../types/review";
 import type { GitHubPRFile, GitHubPRResponse } from "../types/github";
 
@@ -16,6 +17,24 @@ export const toneForSummaryTag = (tag: string): SummaryItem["tone"] => {
   if (tag.includes("建议")) return "violet";
   return "green";
 };
+
+export const extractAgentSource = (issue: string): AgentSource => {
+  if (issue.startsWith("[安全]")) return "安全";
+  if (issue.startsWith("[性能]")) return "性能";
+  if (issue.startsWith("[风格]")) return "风格";
+  return "通用";
+};
+
+export const stripAgentPrefix = (value: string) =>
+  value.replace(/^\[(安全|性能|风格)\]\s*/, "");
+
+const toneForRiskSeverity = (severity: "high" | "medium" | "low"): SummaryItem["tone"] => {
+  if (severity === "high") return "orange";
+  if (severity === "medium") return "blue";
+  return "green";
+};
+
+const GENERIC_AGENT_SOURCE: AgentSource = "通用";
 
 const classifySummaryTag = (text: string, fallback = "优化"): string => {
   const value = text.toLowerCase();
@@ -84,6 +103,7 @@ export const mapAnalyzeResponse = (data: ReviewAnalyzeResponse) => {
       text: data.analysis.summary.overview,
       tag: classifySummaryTag(data.analysis.summary.overview, "新增功能"),
       tone: toneForSummaryTag(classifySummaryTag(data.analysis.summary.overview, "新增功能")),
+      agentSource: GENERIC_AGENT_SOURCE,
     },
     ...data.analysis.summary.changedModules.map((module) => {
       const tag = classifySummaryTag(module, "重构");
@@ -91,6 +111,7 @@ export const mapAnalyzeResponse = (data: ReviewAnalyzeResponse) => {
         text: `变更模块：${module}`,
         tag,
         tone: toneForSummaryTag(tag),
+        agentSource: GENERIC_AGENT_SOURCE,
       };
     }),
     ...data.analysis.summary.impact.map((impact) => {
@@ -99,12 +120,14 @@ export const mapAnalyzeResponse = (data: ReviewAnalyzeResponse) => {
         text: impact,
         tag,
         tone: toneForSummaryTag(tag),
+        agentSource: GENERIC_AGENT_SOURCE,
       };
     }),
     ...data.analysis.risks.slice(0, 4).map((risk) => ({
-      text: `${risk.file}${risk.line ? `:${risk.line}` : ""} - ${risk.issue}`,
-      tag: "优化",
-      tone: toneForSummaryTag("优化"),
+      text: `${risk.file}${risk.line ? `:${risk.line}` : ""} - ${stripAgentPrefix(risk.issue)}`,
+      tag: extractAgentSource(risk.issue),
+      tone: toneForRiskSeverity(risk.severity),
+      agentSource: extractAgentSource(risk.issue),
     })),
     ...data.analysis.suggestions.slice(0, 3).map((suggestion) => {
       const tag = classifySummaryTag(suggestion.comment, suggestion.type === "nice_to_have" ? "测试" : "优化");
@@ -112,6 +135,7 @@ export const mapAnalyzeResponse = (data: ReviewAnalyzeResponse) => {
         text: suggestion.comment,
         tag,
         tone: toneForSummaryTag(tag),
+        agentSource: extractAgentSource(suggestion.comment),
       };
     }),
   ];
@@ -137,9 +161,10 @@ export const mapAnalyzeResponse = (data: ReviewAnalyzeResponse) => {
     });
 
   const topIssues: Issue[] = data.analysis.risks.slice(0, 3).map((risk) => ({
-    title: risk.issue,
+    title: stripAgentPrefix(risk.issue),
     file: `${risk.file}${risk.line ? `:${risk.line}` : ""}`,
     level: risk.severity,
+    agentSource: extractAgentSource(risk.issue),
   }));
 
   const aiSuggestions: AiSuggestion[] = data.analysis.suggestions.slice(0, 3).map((suggestion) => ({

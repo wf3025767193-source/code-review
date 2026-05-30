@@ -99,6 +99,7 @@ async def save_completed_record(
     db: AsyncSession,
     record_id: int,
     response: ReviewAnalyzeResponse,
+    analysis_mode: str = "single",
 ) -> None:
     result = await db.execute(select(ReviewRecord).where(ReviewRecord.id == record_id))
     record = result.scalar_one_or_none()
@@ -111,7 +112,10 @@ async def save_completed_record(
 
     record.status = "completed"
     record.summary_json = analysis.summary.model_dump()
-    record.result_json = response.model_dump()
+    record.result_json = {
+        **response.model_dump(),
+        "analysis_mode": analysis_mode,
+    }
     record.file_count = pr.changedFiles
     record.risk_counts = {
         "high": analysis.metrics.highRiskCount,

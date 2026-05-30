@@ -85,3 +85,4 @@ class ReviewAnalyzeResponse(BaseModel):
     pr: ReviewPRInfo
     analysis: ReviewResult
     durationMs: int
+    analysis_mode: Literal["single", "multi"] | None = None
