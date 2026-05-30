@@ -2,9 +2,11 @@
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
 import {
+  Lock,
   Clock,
   DataAnalysis,
   Document,
+  Message,
   Setting,
 } from "@element-plus/icons-vue";
 import type {
@@ -20,6 +22,7 @@ import type {
   AiSummaryStats,
   CodeLine,
   GitHubPRFile,
+  AuthSession,
 } from "./types/review";
 import {
   normalizeGitHubPrUrl,
@@ -30,6 +33,14 @@ import {
   mapGitHubPRToPullRequest,
   parsePatchToCodeLines,
 } from "./api/reviewApi";
+import {
+  clearAuthSession,
+  loadAuthSession,
+  login,
+  logout,
+  register,
+  saveAuthSession,
+} from "./api/authApi";
 import AppSidebar from "./components/AppSidebar.vue";
 import SearchPanel from "./components/SearchPanel.vue";
 import PRInfoCard from "./components/PRInfoCard.vue";
@@ -49,6 +60,12 @@ const backendWarning = ref("");
 const errorMessage = ref("");
 const selectedCodePath = ref("service/payment_service.py");
 const prFiles = ref<GitHubPRFile[]>([]);
+const authSession = ref<AuthSession | null>(loadAuthSession());
+const authDialogVisible = ref(false);
+const authMode = ref<"login" | "register">("login");
+const authEmail = ref("");
+const authPassword = ref("");
+const authLoading = ref(false);
 
 const navItems: NavItem[] = [
   { label: "PR 分析", icon: DataAnalysis, active: true },
@@ -175,7 +192,54 @@ const riskLabel: Record<RiskLevel, string> = {
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "/api/v1";
-const reviewApiToken = import.meta.env.VITE_REVIEW_API_TOKEN || "";
+const currentAccessToken = computed(() => authSession.value?.access_token || "");
+
+const openAuthDialog = (mode: "login" | "register") => {
+  authMode.value = mode;
+  authDialogVisible.value = true;
+  errorMessage.value = "";
+};
+
+const handleAuthSubmit = async () => {
+  if (!authEmail.value || !authPassword.value) {
+    ElMessage.warning("请输入邮箱和密码");
+    return;
+  }
+
+  authLoading.value = true;
+  try {
+    const nextSession = authMode.value === "login"
+      ? await login(apiBaseUrl, authEmail.value, authPassword.value)
+      : await register(apiBaseUrl, authEmail.value, authPassword.value);
+
+    authSession.value = nextSession;
+    saveAuthSession(nextSession);
+    authDialogVisible.value = false;
+    authPassword.value = "";
+    ElMessage.success(authMode.value === "login" ? "登录成功" : "注册成功");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "认证失败";
+    ElMessage.error(message);
+  } finally {
+    authLoading.value = false;
+  }
+};
+
+const handleLogout = async () => {
+  const session = authSession.value;
+  authSession.value = null;
+  clearAuthSession();
+
+  if (!session) return;
+
+  try {
+    await logout(apiBaseUrl, session.access_token, session.refresh_token);
+    ElMessage.success("已登出");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "登出失败";
+    ElMessage.warning(message);
+  }
+};
 
 const updateSelectedCodeFile = (path: string) => {
   selectedCodePath.value = path;
@@ -201,6 +265,12 @@ const handleAnalyze = async () => {
     return;
   }
 
+  if (!currentAccessToken.value) {
+    openAuthDialog("login");
+    ElMessage.warning("请先登录后再开始分析");
+    return;
+  }
+
   isAnalyzing.value = true;
   analysisStatus.value = "analyzing";
   errorMessage.value = "";
@@ -210,8 +280,8 @@ const handleAnalyze = async () => {
 
   try {
     const [data, githubPR] = await Promise.all([
-      analyzePR(nextUrl, apiBaseUrl, reviewApiToken),
-      fetchGitHubPR(nextUrl, apiBaseUrl, reviewApiToken),
+      analyzePR(nextUrl, apiBaseUrl, currentAccessToken.value),
+      fetchGitHubPR(nextUrl, apiBaseUrl, currentAccessToken.value),
     ]);
     const mapped = mapAnalyzeResponse(data);
 
@@ -247,6 +317,11 @@ const handleAnalyze = async () => {
     analysisStatus.value = "failed";
     const message = error instanceof Error ? error.message : "后端请求失败";
     errorMessage.value = `分析失败：${message}`;
+    if (message.includes("401") || message.includes("Authentication") || message.includes("token")) {
+      authSession.value = null;
+      clearAuthSession();
+      openAuthDialog("login");
+    }
     ElMessage.error(errorMessage.value);
   } finally {
     isAnalyzing.value = false;
@@ -256,7 +331,13 @@ const handleAnalyze = async () => {
 
 <template>
   <div class="app-shell">
-    <AppSidebar :nav-items="navItems" />
+    <AppSidebar
+      :nav-items="navItems"
+      :user="authSession?.user || null"
+      @login="openAuthDialog('login')"
+      @register="openAuthDialog('register')"
+      @logout="handleLogout"
+    />
 
     <main class="workspace">
       <section class="hero-row">
@@ -308,6 +389,46 @@ const handleAnalyze = async () => {
         </aside>
       </section>
     </main>
+
+    <el-dialog
+      v-model="authDialogVisible"
+      class="auth-dialog"
+      :title="authMode === 'login' ? '登录账号' : '注册账号'"
+      width="380px"
+      append-to-body
+    >
+      <el-form label-position="top" @submit.prevent="handleAuthSubmit">
+        <el-form-item label="邮箱">
+          <el-input
+            v-model="authEmail"
+            :prefix-icon="Message"
+            placeholder="name@example.com"
+            autocomplete="email"
+          />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="authPassword"
+            :prefix-icon="Lock"
+            type="password"
+            show-password
+            placeholder="至少 8 位，包含字母和数字"
+            autocomplete="current-password"
+            @keyup.enter="handleAuthSubmit"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="auth-footer">
+          <el-button text @click="authMode = authMode === 'login' ? 'register' : 'login'">
+            {{ authMode === "login" ? "没有账号，去注册" : "已有账号，去登录" }}
+          </el-button>
+          <el-button class="auth-primary" type="primary" :loading="authLoading" @click="handleAuthSubmit">
+            {{ authMode === "login" ? "登录" : "注册" }}
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -364,6 +485,21 @@ const handleAnalyze = async () => {
 
 .right-column {
   min-height: 0;
+}
+
+:global(.auth-dialog .el-dialog__body) {
+  padding-top: 8px;
+}
+
+.auth-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-primary {
+  border: 0;
+  background: $primary-gradient;
 }
 
 @media (max-width: 1440px) {

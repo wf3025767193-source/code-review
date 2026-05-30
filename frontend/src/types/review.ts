@@ -93,6 +93,19 @@ export interface GitHubPRResponse {
   files: GitHubPRFile[];
 }
 
+export interface AuthUser {
+  id: number;
+  email: string;
+  created_at: string;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+}
+
 export interface AiSuggestion {
   level: "高风险" | "中风险";
   title: string;

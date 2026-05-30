@@ -259,12 +259,12 @@ export const mapGitHubPRToPullRequest = (data: GitHubPRResponse): Partial<PullRe
   deletions: data.deletions,
 });
 
-export const fetchGitHubPR = async (prUrl: string, apiBaseUrl: string, reviewApiToken: string) => {
+export const fetchGitHubPR = async (prUrl: string, apiBaseUrl: string, accessToken: string) => {
   const response = await fetch(`${apiBaseUrl}/github/pr`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(reviewApiToken ? { Authorization: `Bearer ${reviewApiToken}` } : {}),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
     body: JSON.stringify({ url: prUrl }),
   });
@@ -276,12 +276,12 @@ export const fetchGitHubPR = async (prUrl: string, apiBaseUrl: string, reviewApi
   return (await response.json()) as GitHubPRResponse;
 };
 
-export const analyzePR = async (prUrl: string, apiBaseUrl: string, reviewApiToken: string) => {
+export const analyzePR = async (prUrl: string, apiBaseUrl: string, accessToken: string) => {
   const response = await fetch(`${apiBaseUrl}/review/analyze`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(reviewApiToken ? { Authorization: `Bearer ${reviewApiToken}` } : {}),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
     body: JSON.stringify({ prUrl }),
   });
