@@ -1,7 +1,7 @@
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { analyzePR, fetchGitHubPR, isAsyncAnalyzeResponse, normalizeGitHubPrUrl, streamReviewProgress } from "../api/reviewApi";
-import { fetchReviewRecordDetail } from "../api/historyApi";
+import { fetchReviewRecordDetail, submitReviewFeedback } from "../api/historyApi";
 import {
   defaultAiSummaryStats,
   defaultAiSuggestions,
@@ -18,8 +18,13 @@ import {
   mapGitHubFiles,
   mapGitHubPRToPullRequest,
 } from "../mappers/reviewMapper";
+import { extractAgentSource } from "../mappers/reviewMapper";
 import { parsePatchToCodeLines } from "../utils/patchParser";
+import { phaseLabel } from "../utils/progressLabels";
 import type {
+  AgentStats,
+  FeedbackRating,
+  ProgressState,
   PullRequestInfo,
   ReviewAnalyzeResponse,
   RiskLevel,
@@ -59,11 +64,24 @@ export const usePrAnalysis = (
   const codeLines = ref([...defaultCodeLines]);
   const aiSuggestions = ref([...defaultAiSuggestions]);
   const topIssues = ref([...defaultTopIssues]);
+  const currentRecordId = ref<number | null>(null);
+  const feedbackState = ref<Record<string, FeedbackRating>>({});
+  const progressState = reactive<ProgressState>({
+    percent: 0,
+    currentPhase: "",
+    reconnecting: false,
+    agents: {
+      "[安全]": "idle",
+      "[性能]": "idle",
+      "[风格]": "idle",
+    },
+    agentRisks: {},
+  });
 
-  const summaryTags = computed(() => ["全部", ...Array.from(new Set(summaryItems.value.map((item) => item.tag)))]);
+  const summaryTags = computed(() => ["全部", "安全", "性能", "风格", "通用"]);
   const filteredSummaryItems = computed(() => {
     if (activeSummaryTag.value === "全部") return summaryItems.value;
-    return summaryItems.value.filter((item) => item.tag === activeSummaryTag.value);
+    return summaryItems.value.filter((item) => item.agentSource === activeSummaryTag.value);
   });
 
   const selectedFileSuggestions = computed(() => {
@@ -77,10 +95,70 @@ export const usePrAnalysis = (
     return "分析完成";
   });
 
-  const applyAnalyzeResult = (data: ReviewAnalyzeResponse, githubPR: { files: GitHubPRFile[] }) => {
+  const analysisMode = computed(() => currentAnalysis.value?.analysis_mode || (currentRecordId.value ? "multi" : "single"));
+  const showAsyncProgress = computed(() => isAnalyzing.value && currentRecordId.value !== null);
+
+  const agentStats = computed<Record<string, AgentStats>>(() => {
+    const stats: Record<string, AgentStats> = {
+      "安全": { risks: 0, high: 0 },
+      "性能": { risks: 0, high: 0 },
+      "风格": { risks: 0, high: 0 },
+      "通用": { risks: 0, high: 0 },
+    };
+
+    for (const risk of currentAnalysis.value?.analysis.risks || []) {
+      const source = extractAgentSource(risk.issue);
+      stats[source].risks += 1;
+      if (risk.severity === "high") stats[source].high += 1;
+    }
+
+    return stats;
+  });
+
+  const languages = computed(() => {
+    const values = prFiles.value
+      .map((file) => file.filename.split(".").pop()?.toLowerCase())
+      .filter((value): value is string => Boolean(value));
+    return Array.from(new Set(values));
+  });
+
+  const resetProgress = () => {
+    progressState.percent = 0;
+    progressState.currentPhase = "";
+    progressState.reconnecting = false;
+    progressState.agents["[安全]"] = "idle";
+    progressState.agents["[性能]"] = "idle";
+    progressState.agents["[风格]"] = "idle";
+    progressState.agentRisks = {};
+  };
+
+  const updateProgress = (event: Parameters<Parameters<typeof streamReviewProgress>[3]>[0]) => {
+    progressState.reconnecting = event.message === "重新连接中...";
+    if (event.percent !== undefined) progressState.percent = event.percent;
+
+    const nextLabel = phaseLabel(event.event, event.phase, event.agent);
+    progressState.currentPhase = event.message || nextLabel || progressState.currentPhase;
+
+    if (event.agent) {
+      if (event.event === "agent_done") progressState.agents[event.agent] = "done";
+      else if (event.event === "agent_error") progressState.agents[event.agent] = "error";
+      else if (event.event === "agent_skipped") progressState.agents[event.agent] = "skipped";
+      else progressState.agents[event.agent] = "running";
+
+      if (event.event === "agent_done") {
+        progressState.agentRisks[event.agent] = {
+          risks: event.risks || 0,
+          high: event.high || 0,
+        };
+      }
+    }
+  };
+
+  const applyAnalyzeResult = (data: ReviewAnalyzeResponse, githubPR: { files: GitHubPRFile[] }, recordId?: number | null) => {
     const mapped = mapAnalyzeResponse(data);
 
     currentAnalysis.value = data;
+    currentRecordId.value = recordId ?? null;
     prFiles.value = githubPR.files;
     pullRequest.value = {
       ...pullRequest.value,
@@ -107,6 +185,14 @@ export const usePrAnalysis = (
     backendWarning.value = mapped.warnings;
     analysisDuration.value = data.durationMs / 1000;
     analysisStatus.value = "completed";
+  };
+
+  const sendAnalysisFeedback = async (riskIndex: number, rating: FeedbackRating) => {
+    if (!currentRecordId.value) return;
+
+    await submitReviewFeedback(apiBaseUrl, getAccessToken(), currentRecordId.value, riskIndex, rating);
+    feedbackState.value[`${currentRecordId.value}-${riskIndex}`] = rating;
+    ElMessage.success("反馈已提交");
   };
 
   const updateSelectedCodeFile = (path: string) => {
@@ -146,6 +232,8 @@ export const usePrAnalysis = (
     analyzedUrl.value = nextUrl;
     prUrl.value = nextUrl;
     backendWarning.value = "";
+    currentRecordId.value = null;
+    resetProgress();
 
     try {
       const [data, githubPR] = await Promise.all([
@@ -159,24 +247,24 @@ export const usePrAnalysis = (
       } as PullRequestInfo;
 
       if (isAsyncAnalyzeResponse(data)) {
-        backendWarning.value = `多 Agent 分析中，任务 #${data.record_id}`;
+        currentRecordId.value = data.record_id;
+        progressState.currentPhase = `多 Agent 分析中，任务 #${data.record_id}`;
+        let streamError = "";
         await streamReviewProgress(apiBaseUrl, data.record_id, accessToken, (event) => {
-          if (event.message) backendWarning.value = event.message;
-          if (event.percent !== undefined) {
-            backendWarning.value = `${backendWarning.value || "多 Agent 分析中"}（${event.percent}%）`;
-          }
+          updateProgress(event);
           if (event.event === "error") {
-            throw new Error(event.message || "多 Agent 分析失败");
+            streamError = event.message || "多 Agent 分析失败";
           }
         });
+        if (streamError) throw new Error(streamError);
 
         const detail = await fetchReviewRecordDetail(apiBaseUrl, accessToken, data.record_id);
         if (!detail.result_json) {
           throw new Error("分析完成但未获取到结果");
         }
-        applyAnalyzeResult(detail.result_json, githubPR);
+        applyAnalyzeResult(detail.result_json, githubPR, data.record_id);
       } else {
-        applyAnalyzeResult(data, githubPR);
+        applyAnalyzeResult({ ...data, analysis_mode: data.analysis_mode || "single" }, githubPR, null);
       }
 
       ElMessage.success("后端分析完成");
@@ -215,11 +303,19 @@ export const usePrAnalysis = (
     codeLines,
     aiSuggestions,
     topIssues,
+    currentRecordId,
+    feedbackState,
+    progressState,
+    agentStats,
+    analysisMode,
+    showAsyncProgress,
+    languages,
     summaryTags,
     filteredSummaryItems,
     selectedFileSuggestions,
     analysisStatusText,
     updateSelectedCodeFile,
+    sendAnalysisFeedback,
     handleAnalyze,
   };
 };

@@ -1,4 +1,5 @@
 import { apiRequest } from "./httpClient";
+import { fetchReviewRecordDetail } from "./historyApi";
 import type { GitHubPRResponse } from "../types/github";
 import type { ReviewAnalyzeResult, ReviewProgressEvent } from "../types/review";
 
@@ -40,39 +41,64 @@ export const streamReviewProgress = async (
   recordId: number,
   accessToken: string,
   onEvent: (event: ReviewProgressEvent) => void,
+  maxRetries = 3,
 ) => {
-  const response = await fetch(`${apiBaseUrl}/review/analyze/${recordId}/stream`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!response.ok || !response.body) {
-    throw new Error(`进度流连接失败：${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
-
-    for (const chunk of chunks) {
-      const dataLine = chunk.split("\n").find((line) => line.startsWith("data: "));
-      if (!dataLine) continue;
-
-      const event = JSON.parse(dataLine.slice(6)) as ReviewProgressEvent;
-      onEvent(event);
-      if (event.event === "complete" || event.event === "error") {
-        await reader.cancel();
-        return;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    if (attempt > 0) {
+      onEvent({ event: "phase_start", message: "重新连接中...", percent: undefined });
+      try {
+        const record = await fetchReviewRecordDetail(apiBaseUrl, accessToken, recordId);
+        if (record.status === "completed") {
+          onEvent({ event: "complete", status: "completed", record_id: recordId, percent: 100 });
+          return;
+        }
+        if (record.status === "failed") {
+          onEvent({ event: "error", status: "failed", record_id: recordId, message: "分析失败", percent: 0 });
+          return;
+        }
+      } catch {
+        // Continue with the SSE reconnect attempt below.
       }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000 * attempt));
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/review/analyze/${recordId}/stream`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`进度流连接失败：${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+
+        for (const chunk of chunks) {
+          const dataLine = chunk.split("\n").find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+
+          const event = JSON.parse(dataLine.slice(6)) as ReviewProgressEvent;
+          onEvent(event);
+          if (event.event === "complete" || event.event === "error") {
+            await reader.cancel();
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
     }
   }
 };

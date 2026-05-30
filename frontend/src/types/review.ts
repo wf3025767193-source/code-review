@@ -5,6 +5,21 @@ export type { ActiveView, NavItem } from "./navigation";
 export type { InsightCard } from "./ui";
 
 export type RiskLevel = "high" | "medium" | "low";
+export type AgentSource = "安全" | "性能" | "风格" | "通用";
+export type AgentStatus = "idle" | "running" | "done" | "error" | "skipped";
+
+export interface AgentStats {
+  risks: number;
+  high: number;
+}
+
+export interface ProgressState {
+  percent: number;
+  currentPhase: string;
+  reconnecting: boolean;
+  agents: Record<string, AgentStatus>;
+  agentRisks: Record<string, AgentStats>;
+}
 
 export interface PullRequestInfo {
   repository: string;
@@ -26,6 +41,7 @@ export interface SummaryItem {
   text: string;
   tag: string;
   tone: "green" | "blue" | "orange" | "violet";
+  agentSource?: AgentSource;
 }
 
 export interface RiskFile {
@@ -77,6 +93,18 @@ export interface Issue {
   title: string;
   file: string;
   level: RiskLevel;
+  agentSource?: AgentSource;
+}
+
+export interface ReviewRisk {
+  file: string;
+  line: number | null;
+  severity: RiskLevel;
+  category: string;
+  issue: string;
+  impact: string;
+  suggestion: string;
+  confidence: number;
 }
 
 export interface ReviewAnalyzeResponse {
@@ -99,16 +127,7 @@ export interface ReviewAnalyzeResponse {
       changedModules: string[];
       impact: string[];
     };
-    risks: Array<{
-      file: string;
-      line: number | null;
-      severity: RiskLevel;
-      category: string;
-      issue: string;
-      impact: string;
-      suggestion: string;
-      confidence: number;
-    }>;
+    risks: ReviewRisk[];
     suggestions: Array<{
       file: string;
       type: "must_fix" | "should_fix" | "nice_to_have";
@@ -123,6 +142,7 @@ export interface ReviewAnalyzeResponse {
     warnings: string[];
   };
   durationMs: number;
+  analysis_mode?: "single" | "multi";
 }
 
 export interface ReviewAnalyzeTaskResponse {
@@ -133,7 +153,7 @@ export interface ReviewAnalyzeTaskResponse {
 export type ReviewAnalyzeResult = ReviewAnalyzeResponse | ReviewAnalyzeTaskResponse;
 
 export interface ReviewProgressEvent {
-  event: "phase_start" | "phase_done" | "agent_start" | "agent_done" | "agent_error" | "complete" | "error";
+  event: "phase_start" | "phase_done" | "agent_start" | "agent_done" | "agent_error" | "agent_skipped" | "complete" | "error";
   status?: "running" | "completed" | "failed";
   record_id?: number;
   review_record_id?: number;
@@ -141,4 +161,6 @@ export interface ReviewProgressEvent {
   agent?: string;
   message?: string;
   percent?: number;
+  risks?: number;
+  high?: number;
 }

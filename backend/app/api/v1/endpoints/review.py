@@ -108,7 +108,8 @@ async def analyze_pr(
 
                     orchestrator = ReviewOrchestrator(github_service)
                     response = await orchestrator.analyze(pr_url, pr_data, on_progress=_on_progress)
-                    await save_completed_record(task_db, record_id, response)
+                    response.analysis_mode = "multi"
+                    await save_completed_record(task_db, record_id, response, analysis_mode="multi")
                     await pg.publish_complete(redis, record_id)
             except Exception as exc:
                 async with async_session() as task_db:
@@ -124,10 +125,11 @@ async def analyze_pr(
     try:
         orchestrator = ReviewOrchestrator(github_service)
         response = await orchestrator.analyze(pr_url, pr_data)
+        response.analysis_mode = "single"
     except Exception:
         await save_failed_record(db, record_id)
         raise
 
-    await save_completed_record(db, record_id, response)
+    await save_completed_record(db, record_id, response, analysis_mode="single")
     logger.info("持久化完成 | record_id=%d", record_id)
     return response

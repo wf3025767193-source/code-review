@@ -2,9 +2,19 @@
 import { Files } from "@element-plus/icons-vue";
 import type { PullRequestInfo } from "../types/review";
 
-defineProps<{
+const props = defineProps<{
   pullRequest: PullRequestInfo;
+  languages: string[];
 }>();
+
+const langMap: Record<string, string> = {
+  py: "Python",
+  ts: "TypeScript",
+  js: "JavaScript",
+  java: "Java",
+  go: "Go",
+  sql: "SQL",
+};
 </script>
 
 <template>
@@ -15,6 +25,14 @@ defineProps<{
           <el-icon><Files /></el-icon>
           <strong>{{ pullRequest.repository }}</strong>
           <el-tag class="repo-tag" size="small">{{ pullRequest.visibility }}</el-tag>
+          <span class="language-tags">
+            <el-tag v-for="lang in props.languages.slice(0, 3)" :key="lang" size="small" type="info">
+              {{ langMap[lang] || lang }}
+            </el-tag>
+            <el-tag v-if="props.languages.length > 3" size="small" type="info">
+              +{{ props.languages.length - 3 }}
+            </el-tag>
+          </span>
         </div>
         <h2>{{ pullRequest.title }}</h2>
         <div class="description-marquee" :title="pullRequest.description">
@@ -125,8 +143,16 @@ defineProps<{
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   color: $text;
   font-size: 13px;
+}
+
+.language-tags {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .repo-tag {
