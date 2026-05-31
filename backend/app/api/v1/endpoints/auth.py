@@ -12,7 +12,7 @@ from app.schemas.auth import (
     RefreshRequest,
     RegisterRequest,
 )
-from app.services.auth.service import login, register, revoke_refresh_token, rotate_tokens
+from app.services.auth import login, register, revoke_refresh_token, rotate_tokens
 
 router = APIRouter(
     prefix="/auth",
