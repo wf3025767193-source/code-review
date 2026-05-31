@@ -11,7 +11,7 @@ from app.core.db import get_db
 from app.core.redis import get_redis
 from app.core.security import require_jwt_user
 from app.models.review_record import ReviewRecord
-from app.services.review.record_service import get_user_record
+from app.services.review import get_user_record
 
 logger = logging.getLogger(__name__)
 
